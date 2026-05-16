@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hiremi
+      POSTGRES_PASSWORD: hiremi
+      POSTGRES_DB: hiremi
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hiremi"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: migrate/migrate:v4.17.0
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    command: [
+      "-path", "/migrations",
+      "-database", "postgres://hiremi:hiremi@db:5432/hiremi?sslmode=disable",
+      "up"
+    ]
+
+  app:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://hiremi:hiremi@db:5432/hiremi?sslmode=disable"
+      CALLBACK_BASE_URL: "http://app:8080/api/v1/callbacks"
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:
