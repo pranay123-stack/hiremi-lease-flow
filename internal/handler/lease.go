@@ -25,10 +25,10 @@ func (h *LeaseHandler) GetLease(w http.ResponseWriter, r *http.Request) {
 	lease, err := h.svc.GetLease(r.Context(), leaseID)
 	if err != nil {
 		if errors.Is(err, model.ErrLeaseNotFound) {
-			writeError(w, http.StatusNotFound, "lease not found")
+			writeError(w, r, http.StatusNotFound, "lease not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeError(w, r, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -45,12 +45,12 @@ func (h *LeaseHandler) SignLease(w http.ResponseWriter, r *http.Request) {
 
 	var req signRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.TenantID == "" {
-		writeError(w, http.StatusBadRequest, "tenant_id is required")
+		writeError(w, r, http.StatusBadRequest, "tenant_id is required")
 		return
 	}
 
@@ -62,14 +62,14 @@ func (h *LeaseHandler) SignLease(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, model.ErrNotSignable) {
-			writeError(w, http.StatusConflict, "lease is not in a signable state (deposit must be paid first)")
+			writeError(w, r, http.StatusConflict, "lease is not in a signable state (deposit must be paid first)")
 			return
 		}
 		if errors.Is(err, model.ErrLeaseNotFound) {
-			writeError(w, http.StatusNotFound, "lease not found")
+			writeError(w, r, http.StatusNotFound, "lease not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -88,26 +88,26 @@ func (h *LeaseHandler) AbandonLease(w http.ResponseWriter, r *http.Request) {
 
 	var req abandonRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.TenantID == "" {
-		writeError(w, http.StatusBadRequest, "tenant_id is required")
+		writeError(w, r, http.StatusBadRequest, "tenant_id is required")
 		return
 	}
 
 	err := h.svc.AbandonLease(r.Context(), leaseID, req.TenantID)
 	if err != nil {
 		if errors.Is(err, model.ErrLeaseNotFound) {
-			writeError(w, http.StatusNotFound, "lease not found")
+			writeError(w, r, http.StatusNotFound, "lease not found")
 			return
 		}
 		if errors.Is(err, model.ErrInvalidTransition) {
-			writeError(w, http.StatusConflict, "lease cannot be abandoned from its current state")
+			writeError(w, r, http.StatusConflict, "lease cannot be abandoned from its current state")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 

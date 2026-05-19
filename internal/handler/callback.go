@@ -24,7 +24,7 @@ func NewCallbackHandler(svc *service.PaymentService) *CallbackHandler {
 func (h *CallbackHandler) HandleMTNCallback(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to read body")
+		writeError(w, r, http.StatusBadRequest, "failed to read body")
 		return
 	}
 
@@ -32,19 +32,19 @@ func (h *CallbackHandler) HandleMTNCallback(w http.ResponseWriter, r *http.Reque
 	signature := r.Header.Get("X-Callback-Signature")
 	if signature == "" {
 		slog.Warn("MTN callback missing signature header")
-		writeError(w, http.StatusUnauthorized, "missing callback signature")
+		writeError(w, r, http.StatusUnauthorized, "missing callback signature")
 		return
 	}
 
 	if !mtn.VerifyCallbackSignature(body, signature) {
 		slog.Warn("MTN callback signature verification failed")
-		writeError(w, http.StatusUnauthorized, "invalid callback signature")
+		writeError(w, r, http.StatusUnauthorized, "invalid callback signature")
 		return
 	}
 
 	var callback mtn.CallbackPayload
 	if err := json.Unmarshal(body, &callback); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid callback payload")
+		writeError(w, r, http.StatusBadRequest, "invalid callback payload")
 		return
 	}
 
@@ -65,13 +65,13 @@ func (h *CallbackHandler) HandleMoovCallback(w http.ResponseWriter, r *http.Requ
 	authHeader := r.Header.Get("Authorization")
 	if !moov.VerifyCallbackToken(authHeader) {
 		slog.Warn("Moov callback authentication failed")
-		writeError(w, http.StatusUnauthorized, "invalid authorization")
+		writeError(w, r, http.StatusUnauthorized, "invalid authorization")
 		return
 	}
 
 	var callback moov.CallbackPayload
 	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid callback payload")
+		writeError(w, r, http.StatusBadRequest, "invalid callback payload")
 		return
 	}
 

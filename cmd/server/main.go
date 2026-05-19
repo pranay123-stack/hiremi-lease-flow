@@ -16,6 +16,7 @@ import (
 
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/events"
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/handler"
+	appmw "github.com/pranay123-stack/hiremi-lease-flow/internal/middleware"
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/provider/moov"
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/provider/mtn"
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/repository"
@@ -58,6 +59,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(appmw.StructuredLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 

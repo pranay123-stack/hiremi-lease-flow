@@ -30,18 +30,18 @@ func (h *PaymentHandler) InitiateDeposit(w http.ResponseWriter, r *http.Request)
 
 	var req initiateDepositRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.TenantID == "" || req.Provider == "" || req.PhoneNumber == "" {
-		writeError(w, http.StatusBadRequest, "tenant_id, provider, and phone_number are required")
+		writeError(w, r, http.StatusBadRequest, "tenant_id, provider, and phone_number are required")
 		return
 	}
 
 	provider := model.PaymentProvider(req.Provider)
 	if provider != model.ProviderMTN && provider != model.ProviderMoov {
-		writeError(w, http.StatusBadRequest, "provider must be 'mtn_momo' or 'moov_money'")
+		writeError(w, r, http.StatusBadRequest, "provider must be 'mtn_momo' or 'moov_money'")
 		return
 	}
 
@@ -52,14 +52,14 @@ func (h *PaymentHandler) InitiateDeposit(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		if errors.Is(err, model.ErrLeaseNotFound) {
-			writeError(w, http.StatusNotFound, "lease not found")
+			writeError(w, r, http.StatusNotFound, "lease not found")
 			return
 		}
 		if errors.Is(err, model.ErrDepositExists) {
-			writeError(w, http.StatusConflict, "a pending deposit payment already exists for this lease")
+			writeError(w, r, http.StatusConflict, "a pending deposit payment already exists for this lease")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -78,10 +78,10 @@ func (h *PaymentHandler) GetDepositStatus(w http.ResponseWriter, r *http.Request
 	payment, err := h.svc.GetDepositStatus(r.Context(), leaseID)
 	if err != nil {
 		if errors.Is(err, model.ErrPaymentNotFound) {
-			writeError(w, http.StatusNotFound, "no deposit payment found for this lease")
+			writeError(w, r, http.StatusNotFound, "no deposit payment found for this lease")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeError(w, r, http.StatusInternalServerError, "internal error")
 		return
 	}
 
