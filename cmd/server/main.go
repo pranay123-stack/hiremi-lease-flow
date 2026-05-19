@@ -75,6 +75,7 @@ func main() {
 		// Lease endpoints
 		r.Get("/leases/{leaseID}", leaseHandler.GetLease)
 		r.Post("/leases/{leaseID}/sign", leaseHandler.SignLease)
+		r.Post("/leases/{leaseID}/abandon", leaseHandler.AbandonLease)
 
 		// Payment endpoints
 		r.Post("/leases/{leaseID}/deposit", paymentHandler.InitiateDeposit)

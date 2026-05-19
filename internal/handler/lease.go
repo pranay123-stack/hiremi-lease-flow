@@ -78,3 +78,41 @@ func (h *LeaseHandler) SignLease(w http.ResponseWriter, r *http.Request) {
 		"message": "lease signed and activated",
 	})
 }
+
+type abandonRequest struct {
+	TenantID string `json:"tenant_id"`
+}
+
+func (h *LeaseHandler) AbandonLease(w http.ResponseWriter, r *http.Request) {
+	leaseID := chi.URLParam(r, "leaseID")
+
+	var req abandonRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.TenantID == "" {
+		writeError(w, http.StatusBadRequest, "tenant_id is required")
+		return
+	}
+
+	err := h.svc.AbandonLease(r.Context(), leaseID, req.TenantID)
+	if err != nil {
+		if errors.Is(err, model.ErrLeaseNotFound) {
+			writeError(w, http.StatusNotFound, "lease not found")
+			return
+		}
+		if errors.Is(err, model.ErrInvalidTransition) {
+			writeError(w, http.StatusConflict, "lease cannot be abandoned from its current state")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": "lease abandoned",
+	})
+}

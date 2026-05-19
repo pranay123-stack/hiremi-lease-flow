@@ -185,6 +185,8 @@ func (s *LeaseService) AbandonLease(ctx context.Context, leaseID, tenantID strin
 		return fmt.Errorf("tenant %s does not own lease %s", tenantID, leaseID)
 	}
 
+	previousStatus := lease.Status
+
 	if err := lease.TransitionTo(model.LeaseStatusAbandoned); err != nil {
 		return err
 	}
@@ -193,9 +195,9 @@ func (s *LeaseService) AbandonLease(ctx context.Context, leaseID, tenantID strin
 	}
 
 	if err := s.publisher.Publish(ctx, tx, leaseID, model.EventLeaseAbandoned, map[string]any{
-		"lease_id":  leaseID,
-		"tenant_id": tenantID,
-		"from_state": lease.Status,
+		"lease_id":   leaseID,
+		"tenant_id":  tenantID,
+		"from_state": previousStatus,
 	}); err != nil {
 		return err
 	}
