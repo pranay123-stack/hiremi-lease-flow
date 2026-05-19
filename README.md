@@ -8,13 +8,13 @@ Backend service implementing the journey from an approved lease to an active ten
 
 ```bash
 # Start everything (PostgreSQL + migrations + app)
-make up
+docker compose up --build -d
 
 # Check it's running
 curl http://localhost:8080/health
 ```
 
-That's it. One command.
+That's it. One command. (If you have `make` installed, `make up` is a shortcut.)
 
 ## API Endpoints
 
