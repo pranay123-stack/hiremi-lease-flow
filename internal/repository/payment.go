@@ -85,9 +85,12 @@ func (r *PaymentRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 
 func scanPayment(row pgx.Row) (*model.Payment, error) {
 	var p model.Payment
+	var failureReason *string
+	var callbackPayload []byte
+
 	err := row.Scan(
 		&p.ID, &p.LeaseID, &p.TenantID, &p.Amount, &p.Provider, &p.ProviderTxID,
-		&p.PhoneNumber, &p.Status, &p.FailureReason, &p.CallbackPayload,
+		&p.PhoneNumber, &p.Status, &failureReason, &callbackPayload,
 		&p.CreatedAt, &p.UpdatedAt, &p.Version,
 	)
 	if err != nil {
@@ -96,5 +99,9 @@ func scanPayment(row pgx.Row) (*model.Payment, error) {
 		}
 		return nil, err
 	}
+	if failureReason != nil {
+		p.FailureReason = *failureReason
+	}
+	p.CallbackPayload = callbackPayload
 	return &p, nil
 }
