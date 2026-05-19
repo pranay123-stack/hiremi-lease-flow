@@ -20,6 +20,7 @@ import (
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/provider/mtn"
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/repository"
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/service"
+	"github.com/pranay123-stack/hiremi-lease-flow/internal/worker"
 )
 
 func main() {
@@ -101,6 +102,12 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Start payment expiry worker
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+	expiryWorker := worker.NewPaymentExpiry(pool, 10*time.Minute, 30*time.Second)
+	go expiryWorker.Run(workerCtx)
+
 	go func() {
 		slog.Info("server starting", "port", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -114,6 +121,8 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	slog.Info("shutting down server")
+
+	workerCancel() // stop background workers
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
