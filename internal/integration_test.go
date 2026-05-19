@@ -22,6 +22,7 @@ import (
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/provider/mtn"
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/repository"
 	"github.com/pranay123-stack/hiremi-lease-flow/internal/service"
+	"github.com/pranay123-stack/hiremi-lease-flow/internal/worker"
 )
 
 func testDB(t *testing.T) *pgxpool.Pool {
@@ -530,5 +531,269 @@ func TestMoovCallback_InvalidToken(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("invalid Moov token: expected 401, got %d", rr.Code)
+	}
+}
+
+// TestMoovTimeout_FailsAndRetryable verifies Moov TIMEOUT status fails payment and allows retry
+func TestMoovTimeout_FailsAndRetryable(t *testing.T) {
+	pool := testDB(t)
+	defer pool.Close()
+	ts := setupTestServer(t, pool)
+
+	leaseID := "test-moov-timeout"
+	tenantID := "tenant-moov-timeout"
+	seedLease(t, pool, leaseID, tenantID)
+
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "moov_money",
+		"phone_number": "+22990007777",
+	})
+
+	providerTxID := getProviderTxID(t, ts, leaseID)
+
+	// Moov reports timeout
+	rr := ts.moovCallback(providerTxID, moov.StatusTimeout, "no response from subscriber")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("moov timeout callback: expected 200, got %d", rr.Code)
+	}
+
+	// Lease should be back to approved (retryable)
+	if status := getLeaseStatus(t, ts, leaseID); status != "approved" {
+		t.Fatalf("expected approved after timeout, got %s", status)
+	}
+
+	// Verify payment is marked failed
+	rr = ts.do("GET", "/api/v1/leases/"+leaseID+"/deposit/status", nil)
+	var payment map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &payment)
+	if payment["status"] != "failed" {
+		t.Fatalf("expected payment failed, got %s", payment["status"])
+	}
+
+	// Tenant can retry
+	rr = ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "mtn_momo",
+		"phone_number": "+22990007777",
+	})
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("retry after timeout: expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestSignAfterActive_Rejected verifies double-sign is prevented
+func TestSignAfterActive_Rejected(t *testing.T) {
+	pool := testDB(t)
+	defer pool.Close()
+	ts := setupTestServer(t, pool)
+
+	leaseID := "test-double-sign"
+	tenantID := "tenant-double-sign"
+	seedLease(t, pool, leaseID, tenantID)
+
+	// Fast-track to active
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "mtn_momo",
+		"phone_number": "+22990008888",
+	})
+	providerTxID := getProviderTxID(t, ts, leaseID)
+	ts.mtnCallback(providerTxID, mtn.StatusSuccessful, "")
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/sign", map[string]string{
+		"tenant_id": tenantID,
+	})
+
+	if status := getLeaseStatus(t, ts, leaseID); status != "active" {
+		t.Fatalf("expected active, got %s", status)
+	}
+
+	// Try to sign again
+	rr := ts.do("POST", "/api/v1/leases/"+leaseID+"/sign", map[string]string{
+		"tenant_id": tenantID,
+	})
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("double sign: expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestAbandonAfterDeposit_Paid verifies abandoning after deposit is paid
+func TestAbandonAfterDepositPaid(t *testing.T) {
+	pool := testDB(t)
+	defer pool.Close()
+	ts := setupTestServer(t, pool)
+
+	leaseID := "test-abandon-paid"
+	tenantID := "tenant-abandon-paid"
+	seedLease(t, pool, leaseID, tenantID)
+
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "mtn_momo",
+		"phone_number": "+22990009999",
+	})
+	providerTxID := getProviderTxID(t, ts, leaseID)
+	ts.mtnCallback(providerTxID, mtn.StatusSuccessful, "")
+
+	if status := getLeaseStatus(t, ts, leaseID); status != "deposit_paid" {
+		t.Fatalf("expected deposit_paid, got %s", status)
+	}
+
+	// Abandon after deposit paid — should work
+	rr := ts.do("POST", "/api/v1/leases/"+leaseID+"/abandon", map[string]string{
+		"tenant_id": tenantID,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("abandon after deposit: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	if status := getLeaseStatus(t, ts, leaseID); status != "abandoned" {
+		t.Fatalf("expected abandoned, got %s", status)
+	}
+}
+
+// TestAbandonActiveLease_Rejected verifies you cannot abandon an active lease
+func TestAbandonActiveLease_Rejected(t *testing.T) {
+	pool := testDB(t)
+	defer pool.Close()
+	ts := setupTestServer(t, pool)
+
+	leaseID := "test-abandon-active"
+	tenantID := "tenant-abandon-active"
+	seedLease(t, pool, leaseID, tenantID)
+
+	// Fast-track to active
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "mtn_momo",
+		"phone_number": "+22990010000",
+	})
+	providerTxID := getProviderTxID(t, ts, leaseID)
+	ts.mtnCallback(providerTxID, mtn.StatusSuccessful, "")
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/sign", map[string]string{
+		"tenant_id": tenantID,
+	})
+
+	if status := getLeaseStatus(t, ts, leaseID); status != "active" {
+		t.Fatalf("expected active, got %s", status)
+	}
+
+	// Cannot abandon active lease
+	rr := ts.do("POST", "/api/v1/leases/"+leaseID+"/abandon", map[string]string{
+		"tenant_id": tenantID,
+	})
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("abandon active: expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestPaymentExpiry verifies the expiry worker expires stale pending payments
+func TestPaymentExpiry(t *testing.T) {
+	pool := testDB(t)
+	defer pool.Close()
+	ts := setupTestServer(t, pool)
+
+	leaseID := "test-expiry"
+	tenantID := "tenant-expiry"
+	seedLease(t, pool, leaseID, tenantID)
+
+	// Initiate a deposit
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "mtn_momo",
+		"phone_number": "+22990011111",
+	})
+
+	if status := getLeaseStatus(t, ts, leaseID); status != "deposit_pending" {
+		t.Fatalf("expected deposit_pending, got %s", status)
+	}
+
+	// Manually backdate the payment to simulate it being old
+	_, err := pool.Exec(context.Background(),
+		`UPDATE payments SET created_at = created_at - INTERVAL '15 minutes' WHERE lease_id = $1`,
+		leaseID,
+	)
+	if err != nil {
+		t.Fatalf("backdate payment: %v", err)
+	}
+
+	// Run the expiry worker with a short timeout
+	w := worker.NewPaymentExpiry(pool, 10*time.Minute, time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go w.Run(ctx)
+
+	// Wait for the worker to pick it up
+	time.Sleep(3 * time.Second)
+
+	// Lease should be back to approved
+	if status := getLeaseStatus(t, ts, leaseID); status != "approved" {
+		t.Fatalf("expected approved after expiry, got %s", status)
+	}
+
+	// Payment should be expired
+	rr := ts.do("GET", "/api/v1/leases/"+leaseID+"/deposit/status", nil)
+	var payment map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &payment)
+	if payment["status"] != "expired" {
+		t.Fatalf("expected payment expired, got %s", payment["status"])
+	}
+
+	// Tenant can retry
+	rr = ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "moov_money",
+		"phone_number": "+22990011111",
+	})
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("retry after expiry: expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestCallbackForUnknownPayment verifies callback with non-existent reference is handled
+func TestCallbackForUnknownPayment(t *testing.T) {
+	pool := testDB(t)
+	defer pool.Close()
+	ts := setupTestServer(t, pool)
+
+	// MTN callback for a payment that doesn't exist
+	rr := ts.mtnCallback("non-existent-tx-id", mtn.StatusSuccessful, "")
+	// Should return 200 (we don't want providers to retry endlessly)
+	// but the error is logged
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unknown payment callback: expected 200, got %d", rr.Code)
+	}
+}
+
+// TestDepositOnActiveOrSignedLease_Rejected verifies no deposit on non-approved leases
+func TestDepositOnActiveLease_Rejected(t *testing.T) {
+	pool := testDB(t)
+	defer pool.Close()
+	ts := setupTestServer(t, pool)
+
+	leaseID := "test-deposit-active"
+	tenantID := "tenant-deposit-active"
+	seedLease(t, pool, leaseID, tenantID)
+
+	// Fast-track to active
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "mtn_momo",
+		"phone_number": "+22990012222",
+	})
+	providerTxID := getProviderTxID(t, ts, leaseID)
+	ts.mtnCallback(providerTxID, mtn.StatusSuccessful, "")
+	ts.do("POST", "/api/v1/leases/"+leaseID+"/sign", map[string]string{
+		"tenant_id": tenantID,
+	})
+
+	// Try to initiate another deposit on active lease
+	rr := ts.do("POST", "/api/v1/leases/"+leaseID+"/deposit", map[string]string{
+		"tenant_id":    tenantID,
+		"provider":     "mtn_momo",
+		"phone_number": "+22990012222",
+	})
+	if rr.Code == http.StatusAccepted {
+		t.Fatal("should not accept deposit on active lease")
 	}
 }
